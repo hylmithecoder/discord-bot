@@ -68,7 +68,7 @@ export class AIService {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      const data: LlamaResponse = await response.json();
+      const data = await response.json() as LlamaResponse;
       
       if (!data.content) {
         return {

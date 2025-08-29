@@ -42,7 +42,7 @@ interface SlashSubcommandOption {
   // handler: (req: any, res: any) => void;
 }
 
-const aiService = new AIService(process.env.LLAMA_CPP_URL);
+const aiService = new AIService(process.env["LLAMA_CPP_URL"]);
 
 const slashCommands: SlashCommand[] = [
   {
@@ -340,11 +340,11 @@ const slashCommands: SlashCommand[] = [
 
 export function handleRouter(){
     const app = express();
-    const PORT = process.env.PORT || 3000;
+    const PORT = process.env["PORT"] || 3000;
     // Router Interactions
     app.post(
     '/interactions',
-    verifyKeyMiddleware(process.env.PUBLIC_KEY!),
+    verifyKeyMiddleware(process.env["PUBLIC_KEY"]!),
     async function (req, res) {
         const { type, data } = req.body;
 

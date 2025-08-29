@@ -75,7 +75,7 @@ client.once('ready', async () => {
   }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+client.login(process.env['DICORD_TOKEN']);
 
 testSpotify();
 

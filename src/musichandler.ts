@@ -33,6 +33,7 @@ interface SpotifyTrackInfo {
 interface SpotifyError {
   success: false;
   error: string;
+  data?: any;
   details?: any;
 }
 
@@ -49,14 +50,14 @@ class SpotifyService {
 
   constructor() {
     this.spotifyApi = new SpotifyWebApi({
-      clientId: process.env.SPOTIFY_CLIENT_ID,
-      clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
+      clientId: process.env["SPOTIFY_CLIENT_ID"],
+      clientSecret: process.env["SPOTIFY_CLIENT_SECRET"],
     });
   }
 
   // Validasi environment variables
   private validateConfig(): boolean {
-    if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) {
+    if (!process.env["SPOTIFY_CLIENT_ID"] || !process.env["SPOTIFY_CLIENT_SECRET"]) {
       console.error('❌ Spotify Client ID atau Client Secret tidak ditemukan di environment variables');
       return false;
     }
@@ -96,7 +97,7 @@ class SpotifyService {
 
     for (const pattern of patterns) {
       const match = url.match(pattern);
-      if (match) return match[1];
+      if (match && match[1]) return match[1];
     }
 
     return null;
@@ -196,10 +197,18 @@ class SpotifyService {
         
         if (searchResult.success && Array.isArray(searchResult.data)) {
           if (searchResult.data.length > 0) {
-            return {
-              success: true,
-              data: searchResult.data[0]
-            };
+            const trackInfo = searchResult.data[0];
+            if (trackInfo) {
+              return {
+                success: true,
+                data: trackInfo
+              };
+            } else {
+              return {
+                success: false,
+                error: `Lagu "${input}" tidak ditemukan`
+              };
+            }
           } else {
             return {
               success: false,
@@ -295,11 +304,11 @@ class SpotifyService {
     
     for (let i = 0; i < inputs.length; i++) {
       const input = inputs[i];
-      const isUrl = this.extractTrackId(input) !== null;
+      const isUrl = this.extractTrackId(input!) !== null;
       
       console.log(`[${i + 1}/${inputs.length}] Testing ${isUrl ? 'URL' : 'Search'}: ${input}`);
       
-      const result = await this.getTrackInfo(input);
+      const result = await this.getTrackInfo(input!);
       
       if (result.success) {
         console.log('✅ Success:');
@@ -338,7 +347,7 @@ class SpotifyService {
         console.log('');
       });
     } else {
-      console.log(`❌ Search failed: ${result.error}`);
+      console.log(`❌ Search failed: ${result.data.error}`);
     }
   }
 }
@@ -362,7 +371,7 @@ export default async function testSpotify() {
     console.log('🎧 SPOTIFY API TEST');
     console.log('='.repeat(50));
     
-    const singleResult = await spotifyService.getTrackInfo(testUrls[0]);
+    const singleResult = await spotifyService.getTrackInfo(testUrls[0]!);
     
     if (singleResult.success) {
       console.log('✅ Single URL Test - SUCCESS');
@@ -513,7 +522,7 @@ export class YoutubeMusicPlayer {
       
       if (searchResults.items.length > 0) {
         const firstResult = searchResults.items[0];
-        if ('url' in firstResult) {
+        if ('url' in firstResult! && "title" in firstResult) {
           console.log('✅ Found video:', firstResult.title);
           return firstResult.url;
         }
