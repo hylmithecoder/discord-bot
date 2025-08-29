@@ -1,4 +1,18 @@
 import SpotifyWebApi from "spotify-web-api-node";
+import { 
+  createAudioPlayer, 
+  createAudioResource, 
+  joinVoiceChannel, 
+  AudioPlayerStatus,
+  VoiceConnection,
+  AudioPlayer,
+  AudioResource,
+  VoiceConnectionStatus,
+  entersState
+} from '@discordjs/voice';
+import { VoiceChannel, GuildMember } from 'discord.js';
+import * as YTDlpWrap from 'yt-dlp-wrap';
+import ytsr from 'ytsr';
 
 // Interface untuk data track
 interface SpotifyTrackInfo {
@@ -96,7 +110,7 @@ class SpotifyService {
   }
 
   // Search tracks berdasarkan nama judul
-  async searchTrackByName(query: string, limit: number = 5): Promise<SpotifyResult | { success: true; data: SpotifyTrackInfo[] }> {
+  async searchTrackByName(query: string, limit: number = 10): Promise<SpotifyResult | { success: true; data: SpotifyTrackInfo[] }> {
     try {
       // Validasi config
       if (!this.validateConfig()) {
@@ -339,7 +353,7 @@ export default async function testSpotify() {
     "https://open.spotify.com/track/7qiZfU4dY1lWllzX7mPBI3?si=abc123",
     "spotify:track:4uLU6hMCjMI75M1A2tKUQC",
     "https://spotify.com/track/0VjIjW4GlULA4LGgAw5mVU",
-    "https://open.spotify.com/track/invalid-track-id", // Test error case
+    "Otonoke", // Test error case
   ];
 
   try {
@@ -374,3 +388,244 @@ export default async function testSpotify() {
 
 // Export class untuk digunakan di tempat lain
 export { SpotifyService };
+
+export class YoutubeMusicPlayer {
+  private player: AudioPlayer;
+  private ytDlp: any;
+  private connection: VoiceConnection | null = null;
+  private currentResource: AudioResource | null = null;
+  private isPlaying: boolean = false;
+
+  constructor() {
+    this.player = createAudioPlayer();
+
+    this.ytDlp = YTDlpWrap;
+    this.setupPlayerListeners();
+  }
+
+  private setupPlayerListeners(): void {
+    this.player.on(AudioPlayerStatus.Playing, () => {
+      this.isPlaying = true;
+      console.log('▶️ Now playing audio');
+    });
+
+    this.player.on(AudioPlayerStatus.Idle, () => {
+      this.isPlaying = false;
+      console.log('⏹️ Playback ended');
+      this.cleanup();
+    });
+
+    this.player.on(AudioPlayerStatus.Buffering, () => {
+      console.log('⏳ Buffering audio...');
+    });
+
+    this.player.on('error', (error) => {
+      console.error('❌ Audio player error:', error);
+      this.isPlaying = false;
+      this.cleanup();
+    });
+  }
+
+  async join(voiceChannel: VoiceChannel): Promise<boolean> {
+    try {
+      // this.connection = joinVoiceChannel({
+      //   channelId: voiceChannel.id,
+      //   guildId: voiceChannel.guild.id,
+      //   adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+      // });
+
+      // // Wait for connection to be ready
+      // await entersState(this.connection, VoiceConnectionStatus.Ready, 30_000);
+      // this.connection.subscribe(this.player);
+
+      // this.connection.on(VoiceConnectionStatus.Disconnected, () => {
+      //   console.log('🔌 Disconnected from voice channel');
+      //   this.cleanup();
+      // });
+
+      if (this.connection) {
+        this.connection.destroy();
+        this.connection = null;
+      }
+
+      // Create new connection
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+      this.connection = joinVoiceChannel({
+        channelId: voiceChannel.id,
+        guildId: voiceChannel.guild.id,
+        adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+      });
+
+      // Wait for connection to be ready
+      await entersState(this.connection, VoiceConnectionStatus.Ready, 30_000);
+      
+      // Subscribe player to connection
+      this.connection.subscribe(this.player);
+      
+      console.log('✅ Successfully joined voice channel');  
+
+      console.log(`🔗 Connected to voice channel: ${voiceChannel.name}`);
+      return true;
+    } catch (error) {
+      console.error('❌ Failed to join voice channel:', error);
+      
+       if (this.connection) {
+        this.connection.destroy();
+        this.connection = null;
+      }
+      return false;
+    }
+  }
+
+  // private async searchYoutube(query: string): Promise<string | null> {
+  //   try {
+  //     const searchResults = await ytsr(query, { limit: 1 });
+  //     if (searchResults.items.length > 0) {
+  //       const firstResult = searchResults.items[0];
+  //       if (firstResult.type === 'video') {
+  //         return firstResult.url;
+  //       }
+  //     }
+  //     return null;
+  //   } catch (error) {
+  //     console.error('❌ YouTube search error:', error);
+  //     return null;
+  //   }
+  // }
+
+  private isValidUrl(string: string): boolean {
+    try {
+      new URL(string);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async searchYoutube(query: string): Promise<string | null> {
+    try {
+      console.log('🔍 Searching YouTube for:', query);
+      const searchResults = await ytsr(query, { 
+        limit: 1,
+        gl: 'ID', // Region Indonesia
+        hl: 'id' // Bahasa Indonesia
+      });
+      
+      if (searchResults.items.length > 0) {
+        const firstResult = searchResults.items[0];
+        if ('url' in firstResult) {
+          console.log('✅ Found video:', firstResult.title);
+          return firstResult.url;
+        }
+      }
+      return null;
+    } catch (error) {
+      console.error('❌ YouTube search error:', error);
+      return null;
+    }
+  }
+
+  async play(input: string): Promise<{ success: boolean; title?: string; error?: string }> {
+    try {
+      let url = input;
+      let title = input;
+
+      // If not a URL, search YouTube
+      if (!this.isValidUrl(input)) {
+        console.log(`🔍 Searching for: ${input}`);
+        const searchResult = await this.searchYoutube(input);
+        if (!searchResult) {
+          return { success: false, error: 'Tidak dapat menemukan musik tersebut' };
+        }
+        url = searchResult;
+      }
+
+      // Get video info
+      try {
+        const videoInfo = await this.ytDlp.getVideoInfo(url);
+        title = videoInfo.title || title;
+        
+        // Create audio stream
+        const stream = await this.ytDlp.streamAudio({
+          url,
+          quality: 'best',
+          format: 'bestaudio',
+          requestOptions: {
+            maxRedirects: 5,
+            timeout: 30000
+          }
+        });
+
+        // Create audio resource
+        this.currentResource = createAudioResource(stream, {
+          inputType: stream.type,
+          inlineVolume: true,
+          metadata: { title }
+        });
+
+        // Set initial volume
+        if (this.currentResource.volume) {
+          this.currentResource.volume.setVolume(0.5);
+        }
+
+        // Play the resource
+        this.player.play(this.currentResource);
+        console.log(`🎵 Now playing: ${title}`);
+
+        return { success: true, title };
+      } catch (error) {
+        console.error('❌ Error getting video info:', error);
+        return { success: false, error: 'Gagal mendapatkan info video' };
+      }
+    } catch (error) {
+      console.error('❌ Play error:', error);
+      return { success: false, error: 'Gagal memutar musik' };
+    }
+  }
+
+  stop(): void {
+    this.player.stop();
+    this.cleanup();
+  }
+
+  pause(): void {
+    if (this.isPlaying) {
+      this.player.pause();
+    }
+  }
+
+  unpause(): void {
+    if (this.player.state.status === AudioPlayerStatus.Paused) {
+      this.player.unpause();
+    }
+  }
+
+  setVolume(volume: number): void {
+    if (this.currentResource && this.currentResource.volume) {
+      // Clamp volume between 0 and 1
+      const clampedVolume = Math.max(0, Math.min(1, volume));
+      this.currentResource.volume.setVolume(clampedVolume);
+    }
+  }
+
+  getStatus(): { isPlaying: boolean; isConnected: boolean } {
+    return {
+      isPlaying: this.isPlaying,
+      isConnected: this.connection?.state.status === VoiceConnectionStatus.Ready
+    };
+  }
+
+  private cleanup(): void {
+    if (this.currentResource) {
+      this.currentResource = null;
+    }
+  }
+
+  disconnect(): void {
+    this.stop();
+    if (this.connection) {
+      this.connection.destroy();
+      this.connection = null;
+    }
+  }
+}

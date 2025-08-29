@@ -5,12 +5,41 @@ import {
   verifyKeyMiddleware,
 } from 'discord-interactions';
 import { AIService } from "./airequest.js";
+import { SpotifyService, YoutubeMusicPlayer } from "./musichandler.js";
+import { exportClient } from "./main.js";
+import { VoiceChannel, GuildMember } from 'discord.js';
 
 interface SlashCommand {
   name: string;
   description: string;
-  options?: any[];
+  options?: SlashSubCommandGroup[];
   handler: (req: any, res: any) => void;
+}
+
+interface SlashSubCommandGroup {
+  name: string;
+  description: string;
+  type: number;
+  required?: boolean;
+  options?: SlashSubcommand[];
+  // handler: (req: any, res: any) => void;
+}
+
+interface SlashSubcommand {
+  name: string;
+  description: string;
+  type: number;
+  required: boolean;
+  options?: SlashSubcommandOption[];
+  // handler: (req: any, res: any) => void;
+}
+
+interface SlashSubcommandOption {
+  name: string;
+  description: string;
+  type: number;
+  required: boolean;
+  // handler: (req: any, res: any) => void;
 }
 
 const aiService = new AIService(process.env.LLAMA_CPP_URL);
@@ -42,9 +71,88 @@ const slashCommands: SlashCommand[] = [
     }
   },
   {
-    name: 'play',
-    description: 'Memutar musik dari YouTube',
+    name: "play",
+    description: "Play music from YouTube",
+    options: [
+      {
+        name: "music",
+        description: "Nama musik atau URL YouTube yang ingin diputar",
+        type: 3,
+        required: true
+      }
+    ],
+    // Di dalam handler play command
+    handler: async (req: any, res: any) => {
+      try {
+        const music = new YoutubeMusicPlayer();
+        const input = req.body.data.options?.[0].value;
+
+        if (!input) {
+          return res.send({
+            type: 4,
+            data: { content: "❌ Silakan masukkan nama musik atau URL!" },
+          });
+        }
+
+        const guild = exportClient().guilds.cache.get(req.body.guild_id);
+        const member = guild?.members.cache.get(req.body.member.user.id);
+        const voiceChannel = member?.voice?.channel;
+
+        if (!voiceChannel) {
+          return res.send({
+            type: 4,
+            data: { content: "❌ Kamu harus join voice channel dulu!" },
+          });
+        }
+
+        // Send deferred response
+        await res.send({
+          type: 5, // DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+          data: { content: "🔍 Mencari dan memuat musik..." },
+        });
+
+        // Join voice channel
+        const joined = await music.join(voiceChannel as VoiceChannel);
+        if (!joined) {
+          return fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              content: "❌ Gagal join voice channel! Coba lagi nanti."
+            })
+          });
+        }
+
+        // Play music
+        const result = await music.play(input);
+        
+        return fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: result.success 
+              ? `🎶 Sekarang memutar: **${result.title}**`
+              : `❌ ${result.error}`
+          })
+        });
+
+      } catch (error) {
+        console.error('❌ Play command error:', error);
+        return fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: "❌ Terjadi kesalahan saat memutar musik."
+          })
+        });
+      }
+    },
+  },
+  {
+    name: 'carimusic',
+    description: 'Cari nama musik dari Spotify',
     handler: async (req, res) => {
+      const spotifyService = new SpotifyService();
       const query = req.body.data.options?.[0]?.value;
 
       if (!query) {
@@ -54,36 +162,54 @@ const slashCommands: SlashCommand[] = [
         });
       }
 
-      // Balas dulu biar user tau sedang cari
-      res.send({
-        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: { content: `🔎 Sedang mencari musik: **${query}** ...` },
-      });
-
       try {
-        // panggil yt-dlp buat cari musik
-        const { exec } = await import("child_process");
-        const util = await import("util");
-        const execPromise = util.promisify(exec);
-
-        const { stdout } = await execPromise(
-          `yt-dlp "ytsearch1:${query}" --print "%(title)s|%(webpage_url)s"`
-        );
-
-        const [title, url] = stdout.trim().split("|");
-
-        // balas hasil pencarian
-        return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            content: `✅ Ditemukan: **${title}**\n${url}`,
-          },
+        // Kirim deferred response dulu
+        await res.send({
+          type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
         });
+
+        // Log query dengan length limit
+        console.log(`🔍 Searching for: "${query.substring(0, 50)}${query.length > 50 ? '...' : ''}"`);
+        
+        const result = await spotifyService.getTrackInfo(query);
+        
+        if (!result?.data?.title || !result?.data?.url) {
+          throw new Error('Invalid track data received');
+        }
+
+        const { title, url, artist, duration } = result.data;
+        
+        // Format pesan dengan informasi lebih detail
+        const response = [
+          `✅ **${title}**`,
+          artist ? `👤 ${artist}` : '',
+          duration ? `⏱️ ${duration}` : '',
+          `🔗 ${url}`
+        ].filter(Boolean).join('\n');
+
+        // Update deferred message
+        return await fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: response
+          })
+        });
+
       } catch (err) {
-        console.error("yt-dlp error:", err);
-        return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: '❌ Gagal mencari musik.' },
+        console.error("❌ Music search error:", err instanceof Error ? err.message : 'Unknown error');
+        
+        const errorMessage = err instanceof Error && err.message.includes('Invalid track') 
+          ? '❌ Data lagu tidak valid atau tidak lengkap.'
+          : '❌ Gagal mencari musik. Silakan coba lagi nanti.';
+
+        // Update deferred message with error
+        return await fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: errorMessage
+          })
         });
       }
     },
@@ -123,7 +249,7 @@ const slashCommands: SlashCommand[] = [
   },
   {
     name: 'help',
-    description: 'Menampilkan bantuan',
+    description: 'Menampilkan list command',
     handler: (req, res) => {
       const commandList = slashCommands.map(cmd => `• \`/${cmd.name}\` - ${cmd.description}`).join('\n');
       return res.send({
@@ -135,156 +261,81 @@ const slashCommands: SlashCommand[] = [
     }
   },
   {
-    name: 'ai',
-    description: 'Chat dengan AI menggunakan model Gemma 3',
+    name: 'ask',
+    description: 'Chat dengan AI Gemma 3 model',
     handler: async (req, res) => {
-      const message = req.body.data.options?.[0]?.value;
+      const message = req.body.data.options?.[0].value;
       const userId = req.body.member?.user?.id || req.body.user?.id;
 
-      if (!message) {
+      if (!message?.trim()) {
         return res.send({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: '❌ Harap masukkan pesan untuk AI!' },
+          data: { content: '❌ Pesan tidak boleh kosong!' }
         });
       }
 
-      // Response awal
-      res.send({
-        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: { 
-          content: `🤖 Sedang memproses pertanyaan: **${message.substring(0, 100)}${message.length > 100 ? '...' : ''}**` 
-        },
+      // Send deferred response
+      await res.send({
+        type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
       });
 
       try {
-        // Format prompt untuk Gemma
-        const formattedPrompt = aiService.formatPrompt(message);
+        console.log(`📝 AI Request from ${userId}: "${message.substring(0, 300)}..."`);
         
-        // Send to AI
+        // Format prompt dan kirim ke AI
+        const formattedPrompt = aiService.formatPrompt(message);
         const aiResult = await aiService.sendRequest(formattedPrompt);
 
-        if (aiResult.success && aiResult.response) {
-          // Limit response length untuk Discord (max 2000 chars)
-          let response = aiResult.response;
-          if (response.length > 1900) {
-            response = response.substring(0, 1900) + '...';
-          }
-
-          return res.send({
-            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: {
-              content: `🤖 **AI Response untuk <@${userId}>:**\n\`\`\`${response}\`\`\``,
-            },
-          });
-        } else {
-          return res.send({
-            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: { 
-              content: `❌ **AI Error:** ${aiResult.error || 'Tidak ada respon dari AI'}` 
-            },
-          });
+        if (!aiResult.success || !aiResult.response) {
+          throw new Error(aiResult.error || 'Tidak ada respon dari AI');
         }
+
+        // Format response dengan line breaks yang lebih baik
+        const formattedResponse = aiResult.response
+          .trim()
+          .replace(/\n{3,}/g, '\n\n'); // Replace multiple newlines with double newline
+
+        // Truncate jika terlalu panjang
+        const finalResponse = formattedResponse.length > 1900 
+          ? formattedResponse.substring(0, 1900) + '...'
+          : formattedResponse;
+
+        // Update deferred message
+        return await fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: [
+              `**<@${userId}>:**`,
+              '```',
+              finalResponse,
+              '```'
+            ].join('\n')
+          })
+        });
+
       } catch (error) {
-        console.error('AI command error:', error);
-        return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: '❌ Terjadi error saat berkomunikasi dengan AI!' },
+        console.error('❌ AI command error:', error instanceof Error ? error.message : 'Unknown error');
+        
+        // Update deferred message with error
+        return await fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: `❌ **Error:** ${error instanceof Error ? error.message : 'Terjadi kesalahan saat berkomunikasi dengan AI'}`
+          })
         });
       }
     },
     options: [
       {
-        name: "pesan",
-        description: "Pesan yang ingin dikirim ke AI",
-        type: 3, // STRING
-        required: true,
-      },
-    ],
-  },
-//   {
-//     name: 'kirim_pesan',
-//     description: 'Kirim pesan ke channel tertentu',
-//     handler: async (req, res) => {
-//       const channelId = req.body.data.options?.find((opt: any) => opt.name === 'channel')?.value;
-//       const message = req.body.data.options?.find((opt: any) => opt.name === 'pesan')?.value;
-//       const userId = req.body.member?.user?.id || req.body.user?.id;
-
-//       if (!channelId || !message) {
-//         return res.send({
-//           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-//           data: { 
-//             content: '❌ Harap masukkan channel dan pesan!',
-//             flags: 64 // EPHEMERAL - hanya user yang bisa lihat
-//           },
-//         });
-//       }
-
-//       try {
-//         // Import discord.js client (assuming it's available globally or can be imported)
-//         const { Client } = await import('discord.js');
-        
-//         // Get the bot client instance (you'll need to pass this from main.ts)
-//         const client = global.discordClient; // This would need to be set up properly
-        
-//         if (!client) {
-//           return res.send({
-//             type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-//             data: { 
-//               content: '❌ Bot client tidak tersedia!',
-//               flags: 64
-//             },
-//           });
-//         }
-
-//         const channel = await client.channels.fetch(channelId);
-        
-//         if (!channel || !channel.isTextBased()) {
-//           return res.send({
-//             type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-//             data: { 
-//               content: '❌ Channel tidak ditemukan atau bukan text channel!',
-//               flags: 64
-//             },
-//           });
-//         }
-
-//         // Send message to target channel
-//         await channel.send(`📨 **Pesan dari <@${userId}>:**\n${message}`);
-
-//         return res.send({
-//           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-//           data: { 
-//             content: `✅ Pesan berhasil dikirim ke <#${channelId}>!`,
-//             flags: 64 // EPHEMERAL
-//           },
-//         });
-
-//       } catch (error) {
-//         console.error('Send message error:', error);
-//         return res.send({
-//           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-//           data: { 
-//             content: '❌ Gagal mengirim pesan!',
-//             flags: 64
-//           },
-//         });
-//       }
-//     },
-//     options: [
-//       {
-//         name: "channel",
-//         description: "Channel tujuan (mention atau ID)",
-//         type: 7, // CHANNEL
-//         required: true,
-//       },
-//       {
-//         name: "pesan",
-//         description: "Pesan yang ingin dikirim",
-//         type: 3, // STRING
-//         required: true,
-//       },
-//     ],
-//   }
+        name: "message",
+        description: "Pesan yang ingin ditanyakan ke AI",
+        type: 3,
+        required: true
+      }
+    ]
+  }
 ];
 
 export function handleRouter(){

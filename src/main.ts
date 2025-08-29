@@ -12,6 +12,10 @@ const client = new Client({
   ],
 });
 
+export function exportClient(){
+  return client;
+}
+
 // === FUNCTION TO REGISTER SLASH COMMANDS ===
 async function registerSlashCommands() {
   try {
@@ -21,7 +25,15 @@ async function registerSlashCommands() {
       await client.application?.commands.create({
         name: command.name,
         description: command.description,
+        options: command.options?.map((option) => ({
+          name: option.name,
+          description: option.description,
+          type: option.type,
+          // required: option.required,
+          // choices: option.choices,
+        })),
       });
+      console.log(`Detail parameter: ${JSON.stringify(command)}`);
       console.log(`✅ Command /${command.name} berhasil didaftarkan!`);
     }
     
@@ -65,6 +77,6 @@ client.once('ready', async () => {
 
 client.login(process.env.DISCORD_TOKEN);
 
-// await testSpotify();
+testSpotify();
 
 handleRouter();
