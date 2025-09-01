@@ -42,7 +42,7 @@ interface SlashSubcommandOption {
   // handler: (req: any, res: any) => void;
 }
 
-const aiService = new AIService(process.env["LLAMA_CPP_URL"]);
+const aiService = new AIService(process.env["GOOGLE_API_KEY"] || "");
 
 const slashCommands: SlashCommand[] = [
   {
@@ -262,7 +262,15 @@ const slashCommands: SlashCommand[] = [
   },
   {
     name: 'ask',
-    description: 'Chat dengan AI Gemma 3 model',
+    description: 'Chat with Gemini Flash 2.0 model',
+    options: [
+      {
+        name: "message",
+        description: "Pesan yang ingin ditanyakan ke AI",
+        type: 3,
+        required: true
+      }
+    ],
     handler: async (req, res) => {
       const message = req.body.data.options?.[0].value;
       const userId = req.body.member?.user?.id || req.body.user?.id;
@@ -283,36 +291,43 @@ const slashCommands: SlashCommand[] = [
         console.log(`📝 AI Request from ${userId}: "${message.substring(0, 300)}..."`);
         
         // Format prompt dan kirim ke AI
-        const formattedPrompt = aiService.formatPrompt(message);
-        const aiResult = await aiService.sendRequest(formattedPrompt);
+        // const formattedPrompt = aiService.formatPrompt(message);
+        const aiResult = await aiService.sendRequest(message);
+        console.log(aiResult);
 
         if (!aiResult.success || !aiResult.response) {
           throw new Error(aiResult.error || 'Tidak ada respon dari AI');
         }
 
-        // Format response dengan line breaks yang lebih baik
-        const formattedResponse = aiResult.response
-          .trim()
-          .replace(/\n{3,}/g, '\n\n'); // Replace multiple newlines with double newline
+        // Format response dengan pembersihan markdown dan line breaks
+        const formattedResponse = aiService.formatAIResponse(aiResult.response);
 
-        // Truncate jika terlalu panjang
-        const finalResponse = formattedResponse.length > 1900 
-          ? formattedResponse.substring(0, 1900) + '...'
-          : formattedResponse;
+        // Split response jika terlalu panjang untuk Discord (2000 char limit)
+        const responseChunks = aiService.splitLongMessage(formattedResponse);
 
-        // Update deferred message
-        return await fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
+        // Update deferred message dengan chunk pertama
+        await fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            content: [
-              `**<@${userId}>:**`,
-              '```',
-              finalResponse,
-              '```'
-            ].join('\n')
+            content: responseChunks[0]
           })
         });
+
+        // Kirim chunk tambahan jika ada
+        for (let i = 1; i < responseChunks.length; i++) {
+          await new Promise(resolve => setTimeout(resolve, 1000)); // Delay 1 detik antar pesan
+          
+          await fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              content: responseChunks[i]
+            })
+          });
+        }
+
+        return;
 
       } catch (error) {
         console.error('❌ AI command error:', error instanceof Error ? error.message : 'Unknown error');
@@ -322,19 +337,11 @@ const slashCommands: SlashCommand[] = [
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            content: `❌ **Error:** ${error instanceof Error ? error.message : 'Terjadi kesalahan saat berkomunikasi dengan AI'}`
+            content: `❌ Terjadi kesalahan saat berkomunikasi dengan AI: ${error instanceof Error ? error.message : 'Unknown error'}`
           })
         });
       }
-    },
-    options: [
-      {
-        name: "message",
-        description: "Pesan yang ingin ditanyakan ke AI",
-        type: 3,
-        required: true
-      }
-    ]
+    }
   }
 ];
 
