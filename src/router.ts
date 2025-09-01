@@ -266,7 +266,7 @@ const slashCommands: SlashCommand[] = [
     options: [
       {
         name: "message",
-        description: "Pesan yang ingin ditanyakan ke AI",
+        description: "Pesan yang ingin ditanyakan",
         type: 3,
         required: true
       }
