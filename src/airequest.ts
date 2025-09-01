@@ -122,6 +122,7 @@ export class AIService {
       .replace(/\n{3,}/g, '\n\n')
       // Bersihkan trailing spaces
       .replace(/[ ]+$/gm, '')
+      .replace(/\n\n\n/g, '\n\n')
       // Fix spacing around code blocks
       .replace(/```\n\n+/g, '```\n')
       .replace(/\n\n+```/g, '\n```');
