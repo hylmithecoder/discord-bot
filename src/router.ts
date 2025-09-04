@@ -5,6 +5,7 @@ import {
   verifyKeyMiddleware,
 } from 'discord-interactions';
 import { AIService } from "./airequest.js";
+import { exec } from "child_process";
 import { SpotifyService, YoutubeMusicPlayer } from "./musichandler.js";
 import { exportClient } from "./main.js";
 import { VoiceChannel, GuildMember } from 'discord.js';
@@ -399,6 +400,20 @@ export function handleRouter(){
             status: "success",
             data: "callback ready"
         });
+    });
+
+     // Endpoint ambil stream URL YouTube
+    app.get("/youtube", (req, res) => {
+      const url = req.query["url"] as string;
+      if (!url) return res.status(400).send("⚠️ query ?url=... wajib ada");
+
+      exec(`yt-dlp -f bestaudio -g "${url}"`, (err, stdout, stderr) => {
+        if (err) {
+          console.error("yt-dlp error:", stderr);
+          return res.status(500).send(stderr || err.message);
+        }
+        res.json({ stream: stdout.trim() });
+      });
     });
 
     // === EXPRESS SERVER ===
