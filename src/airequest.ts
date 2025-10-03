@@ -34,7 +34,7 @@ export class AIService {
   
   constructor(apiKey: string = process.env["GOOGLE_API_KEY"] || '') {
     this.apiKey = apiKey;
-    this.baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+    this.baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent';
   }
 
   // Check if AI server is healthy
