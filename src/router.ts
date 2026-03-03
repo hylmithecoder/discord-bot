@@ -497,12 +497,9 @@ const slashCommands: SlashCommand[] = [
 
 export function handleRouter(){
     const app = express()
-    const PORT = process.env["PORT"] || 3001
+    
     // Router Interactions
-
-    app.use(cors({
-      origin: 'http://localhost:4000'
-    }))
+    app.use(cors())
 
     app.use(express.json())
     
@@ -559,13 +556,10 @@ export function handleRouter(){
     })
 
      // Endpoint ambil stream URL YouTube
-    // Endpoint ambil stream URL YouTube
     app.get("/youtube", (req, res) => {
       const url = req.query["url"] as string
       if (!url) return res.status(400).send("⚠️ query ?url=... wajib ada")
-      const clearResponse = exec(`yt-dlp --rm-cache-dir`)
-
-      console.log(clearResponse)
+      
       exec(`yt-dlp -f bestaudio/best -g --user-agent "Mozilla/5.0" "${url}"`, (err, stdout, stderr) => {
         if (err) {
           console.error("yt-dlp error:", stderr)
@@ -577,7 +571,6 @@ export function handleRouter(){
 
     app.post("/api/send-message", async (req, res) => {
       try {
-        console.log(req.body)
         const { channelId, content } = req.body
 
         const channel = await exportClient().channels.fetch(channelId)
@@ -586,24 +579,18 @@ export function handleRouter(){
         }
 
         await (channel as TextChannel).send(content)
-        return res.json({ success: true })
+        return res.status(200).json({ success: true })
       } catch (err) {
         console.error("❌ Gagal kirim pesan:", err)
         res.status(500).json({ error: "Gagal mengirim pesan" })
       }
     })
 
-    // === EXPRESS SERVER ===
-    app.listen(PORT, () => {
-        console.log(`🌐 Express server listening on port ${PORT}`)
-        console.log(`📝 Total ${slashCommands.length} slash commands terdaftar`)
-        console.log(`🤖 AI Service URL: ${aiService['baseUrl']}`)
-        
-        // Check AI health on startup
-        aiService.checkHealth().then(healthy => {
-        console.log(`🤖 AI Service: ${healthy ? '✅ Healthy' : '❌ Unhealthy'}`)
-        })
+    app.get("/", (_req, res) => {
+        res.send("Discord Bot is running!")
     })
+
+    return app
 }
 
 // Fungsi untuk proxy stream dari Google ke client

@@ -81,8 +81,18 @@ client.once('ready', async () => {
   }
 })
 
-client.login(process.env['DICORD_TOKEN'])
+client.login(process.env['DISCORD_TOKEN'])
 
 testSpotify()
 
-handleRouter()
+const app = handleRouter()
+
+// Only listen if not running as a Vercel serverless function
+if (process.env['NODE_ENV'] !== 'production' || !process.env['VERCEL']) {
+  const PORT = process.env['PORT'] || 3001
+  app.listen(PORT, () => {
+    console.log(`🌐 Express server listening on port ${PORT}`)
+  })
+}
+
+export default app
