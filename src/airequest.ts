@@ -1,4 +1,7 @@
 import { CAINode } from "cainode"
+import { Memory, type MessageMemory } from "./memory.js"
+import fs from "fs/promises"
+import path from "path"
 
 // === LLAMA.CPP AI SERVICE ===
 interface LlamaResponse {
@@ -69,22 +72,41 @@ export class AIService {
   private characterAI: any
   private charToken: string
   private charId: string
+  private memory: Memory
+  private persona: string = ""
 
   constructor(apiKey: string = process.env["GOOGLE_API_KEY"] || '') {
     this.apiKey = apiKey
     this.baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent'
     this.charToken = process.env["CHAR_TOKEN"] || ""
-    this.charId = process.env["CHAR_ID"] || "" // contoh: "5a1d2b3c4d..."
+    this.charId = process.env["CHAR_ID"] || ""
 
-    // Init character
     this.characterAI = new CAINode()
+    this.memory = new Memory()
+
+    // Load persona asynchronously
+    this.loadPersona().catch(err => console.error("❌ Failed to load persona:", err))
   }
 
-  async login(){
-    const reslogin = await this.characterAI.login(this.charToken) 
-    console.log("Login: ", reslogin)
-    const resConnect = await this.characterAI.character.connect(this.charId)
-    console.log("Connect: ", resConnect)
+  private async loadPersona() {
+    try {
+      const personaPath = path.join(process.cwd(), "src", "agent", "SOUL.md")
+      this.persona = await fs.readFile(personaPath, "utf-8")
+      console.log("📜 Persona loaded successfully.")
+    } catch (error) {
+      console.warn("⚠️ Could not load persona from src/agent/SOUL.md, using default.")
+      this.persona = "You are a helpful Discord bot. Answer in Bahasa Indonesia."
+    }
+  }
+
+  async login() {
+    if (this.charToken && this.charId) {
+      const reslogin = await this.characterAI.login(this.charToken)
+      console.log("Login: ", reslogin)
+      const resConnect = await this.characterAI.character.connect(this.charId)
+      console.log("Connect: ", resConnect)
+    }
+    await this.memory.init()
   }
 
   // Check if AI server is healthy
@@ -98,63 +120,45 @@ export class AIService {
     }
   }
 
-  // Send request to llama.cpp
-  async sendRequest(prompt: string, file?: { url: string, contentType: string, filename: string }): Promise<{ success: boolean, response?: string, error?: string }> {
+  // Send request to Gemini
+  async sendRequest(prompt: string, userId?: string, file?: { url: string, contentType: string, filename: string }): Promise<{ success: boolean, response?: string, error?: string }> {
     try {
       console.log(`🤖 Sending Gemini request: "${prompt.substring(0, 50)}..."`)
-      
-      const parts: any[] = [{ text: prompt.trim() }]
+
+      // 1. Get relevant memories
+      const memories = await this.memory.getRelevantMemories(prompt)
+
+      // 2. Format context with persona and memories
+      const formattedPrompt = this.formatPrompt(prompt, memories, userId)
+
+      const parts: any[] = [{ text: formattedPrompt }]
 
       // Handle file attachment
       if (file) {
         console.log(`📎 Processing file: ${file.filename} (${file.contentType})`)
-        
-        // Download file dari Discord CDN
         const fileResponse = await fetch(file.url)
-        if (!fileResponse.ok) {
-          throw new Error(`Failed to download file: ${fileResponse.statusText}`)
-        }
+        if (!fileResponse.ok) throw new Error(`Failed to download file: ${fileResponse.statusText}`)
 
         const fileBuffer = await fileResponse.arrayBuffer()
         const base64Data = Buffer.from(fileBuffer).toString('base64')
 
-        // Determine MIME type
         let mimeType = file.contentType
         if (!mimeType && file.filename) {
-          // Fallback mime type detection
           const ext = file.filename.split('.').pop()?.toLowerCase()
           const mimeMap: Record<string, string> = {
-            'pdf': 'application/pdf',
-            'png': 'image/png',
-            'jpg': 'image/jpeg',
-            'jpeg': 'image/jpeg',
-            'gif': 'image/gif',
-            'webp': 'image/webp'
+            'pdf': 'application/pdf', 'png': 'image/png', 'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg', 'gif': 'image/gif', 'webp': 'image/webp'
           }
           mimeType = mimeMap[ext || ''] || 'application/octet-stream'
         }
 
-        // Add inline data to parts
-        parts.push({
-          inline_data: {
-            mime_type: mimeType,
-            data: base64Data
-          }
-        })
-
-        console.log(`✅ File converted to base64 (${mimeType})`)
+        parts.push({ inline_data: { mime_type: mimeType, data: base64Data } })
       }
 
       const response = await fetch(`${this.baseUrl}?key=${this.apiKey}`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contents: [{
-            parts: parts
-          }]
-        })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: parts }] })
       })
 
       if (!response.ok) {
@@ -163,68 +167,58 @@ export class AIService {
       }
 
       const data = await response.json() as GeminiResponse
-
-      if (data.error) {
-        return {
-          success: false,
-          error: data.error.message
-        }
-      }
+      if (data.error) return { success: false, error: data.error.message }
 
       const content = data.candidates?.[0]?.content?.parts?.[0]?.text
+      if (!content) return { success: false, error: 'AI tidak memberikan respon' }
 
-      if (!content) {
-        return {
-          success: false,
-          error: 'AI tidak memberikan respon'
-        }
-      }
+      // 3. Save interaction to memory
+      await this.memory.addMemory("user", prompt)
+      await this.memory.addMemory("assistant", content)
 
       console.log(`✅ Gemini response generated successfully`)
-      return {
-        success: true,
-        response: content.trim()
-      }
+      return { success: true, response: content.trim() }
 
     } catch (error) {
       console.error('❌ Gemini request error:', error)
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Terjadi error pada AI'
-      }
+      return { success: false, error: error instanceof Error ? error.message : 'Terjadi error pada AI' }
     }
   }
 
-  // Format prompt untuk Gemma model
-  formatPrompt(userMessage: string, context?: string): string {
-    const systemPrompt = context || "You are a helpful Discord bot assistant. Answer concisely and friendly in Bahasa Indonesia."
-    return `${systemPrompt}\n\nUser: ${userMessage}`
+  // Format prompt with Persona and Memories
+  formatPrompt(userMessage: string, memories: MessageMemory[], userId?: string): string {
+    let context = `${this.persona}\n\n`
+
+    if (memories.length > 0) {
+      context += "### Relevant Past Conversations:\n"
+      memories.reverse().forEach(m => {
+        context += `${m.role === "user" ? "User" : "Plana"}: ${m.content}\n`
+      })
+      context += "\n"
+    }
+
+    context += `### Current Interaction:\nUser (ID: ${userId || 'unknown'}): ${userMessage}\nPlana:`
+    return context
   }
 
   formatAIResponse(response: string, discordUserTag: string): string {
-  return response
-    .trim()
-    // Replace Ilmeee-Sensei dengan tag user Discord
-    .replace(/\bIlmeee[-\s]?Sensei\b/gi, `<@${discordUserTag}>`)
-    // Hapus ** (single bold markers)
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    // Ubah *** menjadi ** (triple to double asterisk untuk bold)
-    .replace(/\*\*\*([^*]+)\*\*\*/g, '**$1**')
-    // Bersihkan multiple newlines
-    .replace(/\n{3,}/g, '\n\n')
-    // Bersihkan trailing spaces
-    .replace(/[ ]+$/gm, '')
-    .replace(/\n\n\n/g, '\n\n')
-    // Fix spacing around code blocks
-    .replace(/```\n\n+/g, '```\n')
-    .replace(/\n\n+```/g, '\n```')
-}
+    return response
+      .trim()
+      .replace(/\bIlmeee[-\s]?Sensei\b/gi, `<@${discordUserTag}>`)
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/\*\*\*([^*]+)\*\*\*/g, '**$1**')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/[ ]+$/gm, '')
+      .replace(/\n\n\n/g, '\n\n')
+      .replace(/```\n\n+/g, '```\n')
+      .replace(/\n\n+```/g, '\n```')
+  }
 
 
   splitLongMessage(content: string): string[] {
     const maxLength = 1900 // Sisakan ruang untuk formatting
     const chunks: string[] = []
-    
+
     if (content.length <= maxLength) {
       return [content]
     }
@@ -241,12 +235,12 @@ export class AIService {
           chunks.push(currentChunk.trim())
           currentChunk = ''
         }
-        
+
         // Split paragraph panjang berdasarkan kalimat
         const sentences = paragraph.split('. ')
         for (const sentence of sentences) {
           const sentenceWithPeriod = sentence + (sentence.endsWith('.') ? '' : '.')
-          
+
           if (currentChunk.length + sentenceWithPeriod.length > maxLength) {
             if (currentChunk) {
               chunks.push(currentChunk.trim())

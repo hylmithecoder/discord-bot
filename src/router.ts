@@ -136,16 +136,16 @@ const slashCommands: SlashCommand[] = [
               content: "❌ Gagal join voice channel! Coba lagi nanti."
             })
           })
-        } 
+        }
 
         // Play music
         const result = await music.play(input)
-        
+
         return fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            content: result.success 
+            content: result.success
               ? `🎶 Sekarang memutar: **${result.title}**`
               : `❌ ${result.error}`
           })
@@ -185,15 +185,15 @@ const slashCommands: SlashCommand[] = [
 
         // Log query dengan length limit
         console.log(`🔍 Searching for: "${query.substring(0, 50)}${query.length > 50 ? '...' : ''}"`)
-        
+
         const result = await spotifyService.getTrackInfo(query)
-        
+
         if (!result?.data?.title || !result?.data?.url) {
           throw new Error('Invalid track data received')
         }
 
         const { title, url, artist, duration } = result.data
-        
+
         // Format pesan dengan informasi lebih detail
         const response = [
           `✅ **${title}**`,
@@ -213,8 +213,8 @@ const slashCommands: SlashCommand[] = [
 
       } catch (err) {
         console.error("❌ Music search error:", err instanceof Error ? err.message : 'Unknown error')
-        
-        const errorMessage = err instanceof Error && err.message.includes('Invalid track') 
+
+        const errorMessage = err instanceof Error && err.message.includes('Invalid track')
           ? '❌ Data lagu tidak valid atau tidak lengkap.'
           : '❌ Gagal mencari musik. Silakan coba lagi nanti.'
 
@@ -237,7 +237,7 @@ const slashCommands: SlashCommand[] = [
       },
     ],
   },
- {
+  {
     name: 'stop',
     description: 'Menghentikan musik dan keluar dari voice channel',
     handler: async (req, res) => {
@@ -260,11 +260,11 @@ const slashCommands: SlashCommand[] = [
         })
       }
     }
-  },{
+  }, {
     name: 'loopmusic',
     description: 'Melakukan loop musik terakhir yang diputar',
     handler: async (req, res) => {
-       try {
+      try {
         if (!music.lastTrack) {
           return res.send({
             type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
@@ -365,7 +365,7 @@ const slashCommands: SlashCommand[] = [
 
       try {
         console.log(`📝 AI Request from ${userId}: "${message.substring(0, 300)}..."`)
-        
+
         // Process file attachment if exists
         let fileData = undefined
         if (fileOption) {
@@ -381,7 +381,7 @@ const slashCommands: SlashCommand[] = [
         }
 
         // Send to AI with optional file
-        const aiResult = await aiService.sendRequest(message, fileData)
+        const aiResult = await aiService.sendRequest(message, userId, fileData)
         console.log(aiResult)
 
         if (!aiResult.success || !aiResult.response) {
@@ -404,7 +404,7 @@ const slashCommands: SlashCommand[] = [
         // Send additional chunks
         for (let i = 1; i < responseChunks.length; i++) {
           await new Promise(resolve => setTimeout(resolve, 1000))
-          
+
           await fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -418,7 +418,7 @@ const slashCommands: SlashCommand[] = [
 
       } catch (error) {
         console.error('❌ AI command error:', error instanceof Error ? error.message : 'Unknown error')
-        
+
         return await fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -428,7 +428,7 @@ const slashCommands: SlashCommand[] = [
         })
       }
     }
-  },{
+  }, {
     name: 'plana',
     description: 'Chat with plana model from C.AI',
     options: [
@@ -457,7 +457,7 @@ const slashCommands: SlashCommand[] = [
 
       try {
         console.log(`📝 AI Request from ${userId}: "${message.substring(0, 300)}..."`)
-        
+
         // Format prompt dan kirim ke AI
         // const formattedPrompt = aiService.formatPrompt(message)
         const aiResult = await aiService.sendRequestPlana(message)
@@ -481,7 +481,7 @@ const slashCommands: SlashCommand[] = [
         }
       } catch (error) {
         console.error('❌ AI command error:', error instanceof Error ? error.message : 'Unknown error')
-        
+
         // Update deferred message with error
         return await fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
           method: 'PATCH',
@@ -495,102 +495,102 @@ const slashCommands: SlashCommand[] = [
   }
 ]
 
-export function handleRouter(){
-    const app = express()
-    
-    // Router Interactions
-    app.use(cors())
+export function handleRouter() {
+  const app = express()
 
-    app.use(express.json())
-    
-    app.post(
+  // Router Interactions
+  app.use(cors())
+
+  app.use(express.json())
+
+  app.post(
     '/interactions',
     verifyKeyMiddleware(process.env["PUBLIC_KEY"]!),
     async function (req, res) {
-        const { type, data } = req.body
+      const { type, data } = req.body
 
-        // Handle PING
-        if (type === InteractionType.PING) {
+      // Handle PING
+      if (type === InteractionType.PING) {
         return res.send({ type: InteractionResponseType.PONG })
-        }
+      }
 
-        // Handle APPLICATION_COMMAND
-        if (type === InteractionType.APPLICATION_COMMAND) {
+      // Handle APPLICATION_COMMAND
+      if (type === InteractionType.APPLICATION_COMMAND) {
         const { name } = data
-        
+
         // Cari command handler
         const command = slashCommands.find(cmd => cmd.name === name)
-        
+
         if (command) {
-            try {
+          try {
             return command.handler(req, res)
-            } catch (error) {
+          } catch (error) {
             console.error(`❌ Error executing command ${name}:`, error)
             return res.send({
-                type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-                data: {
+              type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+              data: {
                 content: '❌ Terjadi error saat menjalankan command!',
-                },
+              },
             })
-            }
+          }
         }
-        
+
         // Command tidak ditemukan
         return res.send({
-            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: {
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: {
             content: `❌ Command \`${name}\` tidak dikenal!`,
-            },
+          },
         })
-        }
-
-        return res.status(400).json({ error: 'Unknown interaction type' })
-    },
-    )
-
-    app.get("/callback", (_req, res) => {
-        res.status(200).json({
-            status: "success",
-            data: "callback ready"
-        })
-    })
-
-     // Endpoint ambil stream URL YouTube
-    app.get("/youtube", (req, res) => {
-      const url = req.query["url"] as string
-      if (!url) return res.status(400).send("⚠️ query ?url=... wajib ada")
-      
-      exec(`yt-dlp -f bestaudio/best -g --user-agent "Mozilla/5.0" "${url}"`, (err, stdout, stderr) => {
-        if (err) {
-          console.error("yt-dlp error:", stderr)
-          return res.status(500).send(stderr || err.message)
-        }
-        res.json({ stream: stdout.trim() })
-      })
-    })
-
-    app.post("/api/send-message", async (req, res) => {
-      try {
-        const { channelId, content } = req.body
-
-        const channel = await exportClient().channels.fetch(channelId)
-        if (!channel?.isTextBased()) {
-          return res.status(400).json({ error: "Channel tidak valid" })
-        }
-
-        await (channel as TextChannel).send(content)
-        return res.status(200).json({ success: true })
-      } catch (err) {
-        console.error("❌ Gagal kirim pesan:", err)
-        res.status(500).json({ error: "Gagal mengirim pesan" })
       }
-    })
 
-    app.get("/", (_req, res) => {
-        res.send("Discord Bot is running!")
-    })
+      return res.status(400).json({ error: 'Unknown interaction type' })
+    },
+  )
 
-    return app
+  app.get("/callback", (_req, res) => {
+    res.status(200).json({
+      status: "success",
+      data: "callback ready"
+    })
+  })
+
+  // Endpoint ambil stream URL YouTube
+  app.get("/youtube", (req, res) => {
+    const url = req.query["url"] as string
+    if (!url) return res.status(400).send("⚠️ query ?url=... wajib ada")
+
+    exec(`yt-dlp -f bestaudio/best -g --user-agent "Mozilla/5.0" "${url}"`, (err, stdout, stderr) => {
+      if (err) {
+        console.error("yt-dlp error:", stderr)
+        return res.status(500).send(stderr || err.message)
+      }
+      res.json({ stream: stdout.trim() })
+    })
+  })
+
+  app.post("/api/send-message", async (req, res) => {
+    try {
+      const { channelId, content } = req.body
+
+      const channel = await exportClient().channels.fetch(channelId)
+      if (!channel?.isTextBased()) {
+        return res.status(400).json({ error: "Channel tidak valid" })
+      }
+
+      await (channel as TextChannel).send(content)
+      return res.status(200).json({ success: true })
+    } catch (err) {
+      console.error("❌ Gagal kirim pesan:", err)
+      res.status(500).json({ error: "Gagal mengirim pesan" })
+    }
+  })
+
+  app.get("/", (_req, res) => {
+    res.send("Discord Bot is running!")
+  })
+
+  return app
 }
 
 // Fungsi untuk proxy stream dari Google ke client
@@ -625,7 +625,7 @@ async function proxyStream(streamUrl: string, res: any, req: any) {
 
     // Forward response headers
     res.setHeader("Content-Type", response.headers.get("content-type") || "audio/webm")
-    
+
     const contentLength = response.headers.get("content-length")
     if (contentLength) {
       res.setHeader("Content-Length", contentLength)
@@ -669,6 +669,6 @@ export function addSlashCommand(command: SlashCommand) {
   console.log(`Command /${command.name} ditambahkan ke daftar`)
 }
 
-export default function slashCommandsExport(){
+export default function slashCommandsExport() {
   return slashCommands
 }
