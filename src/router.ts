@@ -98,6 +98,8 @@ const slashCommands: SlashCommand[] = [
       try {
         console.log(req.body.data.options?.[0].value)
         const input = req.body.data.options?.[0].value
+        const userId = req.body.member?.user?.id || req.body.user?.id
+        const username = req.body.member?.user?.username || req.body.user?.username || 'unknown'
 
         if (!input) {
           return res.send({
@@ -107,11 +109,8 @@ const slashCommands: SlashCommand[] = [
         }
 
         const guild = exportClient().guilds.cache.get(req.body.guild_id)
-        // console.log(req.body)
         const member = guild?.members.cache.get(req.body?.member.user?.id)
-        // console.log(member)
         const voiceChannel = member?.voice?.channel
-        console.log(voiceChannel)
         if (!voiceChannel) {
           return res.send({
             type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
@@ -121,32 +120,78 @@ const slashCommands: SlashCommand[] = [
 
         // Send deferred response
         await res.send({
-          type: 5, // DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+          type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
           data: { content: "🔍 Mencari dan memuat musik..." },
         })
 
-        // Join voice channel
-        const joined = await music.join(voiceChannel as VoiceChannel)
-        console.log(joined)
-        if (!joined) {
+        // Join voice channel kalau belum connect
+        if (!music.connection || music.connection.state.status !== 'ready') {
+          const joined = await music.join(voiceChannel as VoiceChannel)
+          if (!joined) {
+            return fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ content: "❌ Gagal join voice channel! Coba lagi nanti." })
+            })
+          }
+        }
+
+        // Cek apakah ini YouTube playlist
+        if (music.isYouTubePlaylist(input)) {
+          const playlistResult = await music.addPlaylistToQueue(input, userId, username)
+          if (!playlistResult.success) {
+            return fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ content: `❌ ${playlistResult.error}` })
+            })
+          }
+
+          // Kalau belum ada yang playing, mulai play
+          if (!music.isPlaying && music.player.state.status !== 'playing') {
+            await music.playNextInQueue()
+          }
+
           return fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              content: "❌ Gagal join voice channel! Coba lagi nanti."
+              content: `📃 **${playlistResult.count} lagu** dari playlist ditambahkan ke antrian!\n📋 Total antrian: ${music.queue.length} lagu`
             })
           })
         }
 
-        // Play music
+        // Kalau sudah ada yang playing, masukkan ke queue
+        if (music.isPlaying || music.player.state.status === 'playing') {
+          const item = music.addToQueue(input, input, userId, username)
+          return fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              content: `📋 Ditambahkan ke antrian #${music.queue.length}: **${item.title}**\n👤 Requested by: <@${userId}>`
+            })
+          })
+        }
+
+        // Langsung play kalau belum ada yang main
         const result = await music.play(input)
+        if (result.success) {
+          music.nowPlaying = {
+            url: input,
+            title: result.title || input,
+            requestedBy: userId,
+            requestedByName: username,
+            addedAt: new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }),
+          }
+          music.isPlaying = true
+        }
 
         return fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             content: result.success
-              ? `🎶 Sekarang memutar: **${result.title}**`
+              ? `🎶 Sekarang memutar: **${result.title}**\n👤 Requested by: <@${userId}>`
               : `❌ ${result.error}`
           })
         })
@@ -239,15 +284,16 @@ const slashCommands: SlashCommand[] = [
   },
   {
     name: 'stop',
-    description: 'Menghentikan musik dan keluar dari voice channel',
+    description: 'Menghentikan musik, hapus antrian, dan keluar dari voice channel',
     handler: async (req, res) => {
       try {
+        const queueCount = music.queue.length
         music.disconnect()
 
         return res.send({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
           data: {
-            content: `⏹️ Musik dihentikan dan bot keluar dari voice channel.\nStop by @${req.body.member?.user?.username || 'unknown'}`,
+            content: `⏹️ Musik dihentikan dan bot keluar dari voice channel.\n🗑️ ${queueCount} lagu dihapus dari antrian.\nStop by @${req.body.member?.user?.username || 'unknown'}`,
           },
         })
       } catch (error) {
@@ -331,7 +377,7 @@ const slashCommands: SlashCommand[] = [
   },
   {
     name: 'ask',
-    description: 'Chat with Gemini Flash 2.5 model',
+    description: 'Chat with Gemini Flash 3.0 model',
     options: [
       {
         name: "message",
@@ -428,69 +474,140 @@ const slashCommands: SlashCommand[] = [
         })
       }
     }
-  }, {
-    name: 'plana',
-    description: 'Chat with plana model from C.AI',
+  },
+  // ========== QUEUE COMMANDS ==========
+  {
+    name: 'queue',
+    description: 'Lihat daftar antrian musik saat ini',
+    handler: (_req, res) => {
+      const { nowPlaying, queue } = music.getQueue()
+
+      let content = ''
+
+      if (nowPlaying) {
+        content += `🎶 **Sedang diputar:** ${nowPlaying.title}\n👤 Requested by: <@${nowPlaying.requestedBy}>\n\n`
+      } else {
+        content += '🔇 Tidak ada musik yang sedang diputar\n\n'
+      }
+
+      if (queue.length === 0) {
+        content += '📋 Antrian kosong.'
+      } else {
+        content += `📋 **Antrian (${queue.length} lagu):**\n`
+        const maxShow = Math.min(queue.length, 15)
+        for (let i = 0; i < maxShow; i++) {
+          const item = queue[i]!
+          content += `\`${i + 1}.\` **${item.title}** — <@${item.requestedBy}>\n`
+        }
+        if (queue.length > 15) {
+          content += `\n...dan ${queue.length - 15} lagu lainnya`
+        }
+      }
+
+      return res.send({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: { content }
+      })
+    }
+  },
+  {
+    name: 'skip',
+    description: 'Skip ke lagu berikutnya di antrian',
+    handler: (_req, res) => {
+      const result = music.skipSong()
+      return res.send({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: result.success
+            ? `⏭️ Skipped: **${result.skipped}**\n🎵 Selanjutnya: **${result.next}**`
+            : '❌ Tidak bisa skip saat ini.'
+        }
+      })
+    }
+  },
+  {
+    name: 'clearqueue',
+    description: 'Hapus semua antrian musik (hanya owner)',
+    handler: (req, res) => {
+      const userId = req.body.member?.user?.id || req.body.user?.id
+      const result = music.clearQueue(userId)
+
+      return res.send({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: result.success
+            ? `🗑️ Antrian dihapus! (${result.cleared} lagu dihapus)`
+            : `❌ ${result.error}`
+        }
+      })
+    }
+  },
+  {
+    name: 'skipto',
+    description: 'Skip ke lagu tertentu di antrian (hanya owner)',
     options: [
       {
-        name: "message",
-        description: "Pesan yang ingin ditanyakan",
-        type: 3,
+        name: 'position',
+        description: 'Nomor lagu di antrian (mulai dari 1)',
+        type: 4, // INTEGER
         required: true
       }
     ],
     handler: async (req, res) => {
-      const message = req.body.data.options?.[0].value
       const userId = req.body.member?.user?.id || req.body.user?.id
+      const position = req.body.data.options?.[0]?.value
 
-      if (!message?.trim()) {
+      if (!position || position < 1) {
         return res.send({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: '❌ Pesan tidak boleh kosong!' }
+          data: { content: '❌ Masukkan nomor antrian yang valid (minimal 1)!' }
         })
       }
 
-      // Send deferred response
-      await res.send({
-        type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
-      })
+      const result = await music.skipTo(position - 1, userId)
 
-      try {
-        console.log(`📝 AI Request from ${userId}: "${message.substring(0, 300)}..."`)
-
-        // Format prompt dan kirim ke AI
-        // const formattedPrompt = aiService.formatPrompt(message)
-        const aiResult = await aiService.sendRequestPlana(message)
-        console.log(aiResult)
-        if (aiResult.success) {
-          await fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              content: aiResult.response
-            })
-          })
-        } else {
-          await fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              content: `❌ Gagal berkomunikasi dengan Plana: ${aiResult.error}`
-            })
-          })
+      return res.send({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: result.success
+            ? `⏭️ Melompat ke: **${result.title}**`
+            : `❌ ${result.error}`
         }
-      } catch (error) {
-        console.error('❌ AI command error:', error instanceof Error ? error.message : 'Unknown error')
+      })
+    }
+  },
+  {
+    name: 'prioritize',
+    description: 'Pindahkan lagu ke posisi pertama di antrian (hanya owner)',
+    options: [
+      {
+        name: 'position',
+        description: 'Nomor lagu di antrian yang mau diprioritaskan (mulai dari 1)',
+        type: 4, // INTEGER
+        required: true
+      }
+    ],
+    handler: (req, res) => {
+      const userId = req.body.member?.user?.id || req.body.user?.id
+      const position = req.body.data.options?.[0]?.value
 
-        // Update deferred message with error
-        return await fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            content: `❌ Terjadi kesalahan saat berkomunikasi dengan AI: ${error instanceof Error ? error.message : 'Unknown error'}`
-          })
+      if (!position || position < 1) {
+        return res.send({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: { content: '❌ Masukkan nomor antrian yang valid (minimal 1)!' }
         })
       }
+
+      const result = music.prioritize(position - 1, userId)
+
+      return res.send({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: result.success
+            ? `⬆️ **${result.title}** dipindahkan ke antrian #1!`
+            : `❌ ${result.error}`
+        }
+      })
     }
   }
 ]

@@ -1,23 +1,27 @@
 import SpotifyWebApi from "spotify-web-api-node"
-import { 
-  createAudioPlayer, 
-  createAudioResource, 
-  joinVoiceChannel, 
+import {
+  createAudioPlayer,
+  createAudioResource,
+  joinVoiceChannel,
   AudioPlayerStatus,
   VoiceConnection,
   AudioPlayer,
-  AudioResource,
   VoiceConnectionStatus,
   entersState,
+  AudioResource,
   StreamType
-} from '@discordjs/voice'
-import prism from "prism-media"
-import { VoiceChannel, GuildMember } from 'discord.js'
+} from 'discord-voip'
+import { VoiceChannel } from 'discord.js'
 import fetch from "node-fetch"
-import {exec} from "child_process"
-import fs, { write } from "fs"
+import { exec, spawn } from "child_process"
+import fs from "fs"
 import { promisify } from "util"
 import path from "path"
+import ffmpegStatic from "ffmpeg-static"
+
+if (ffmpegStatic) {
+  process.env["FFMPEG_PATH"] = ffmpegStatic as any
+}
 
 const execAsync = promisify(exec)
 const musicDir = path.resolve('musics')
@@ -89,11 +93,11 @@ class SpotifyService {
 
       console.log('🔄 Mendapatkan access token baru...')
       const tokenResponse = await this.spotifyApi.clientCredentialsGrant()
-      
+
       this.spotifyApi.setAccessToken(tokenResponse.body.access_token)
       // Set expiry time (default 1 hour)
       this.tokenExpiry = Date.now() + (tokenResponse.body.expires_in * 1000)
-      
+
       console.log('✅ Access token berhasil didapatkan')
       return true
     } catch (error) {
@@ -200,7 +204,7 @@ class SpotifyService {
 
       // Cek apakah input adalah URL atau nama lagu
       const trackId = this.extractTrackId(input)
-      
+
       if (trackId) {
         // Jika input adalah URL, ambil track by ID
         console.log(`🎵 Mengambil info track dari URL: ${trackId}...`)
@@ -209,7 +213,7 @@ class SpotifyService {
         // Jika input bukan URL, search by name dan ambil hasil pertama
         console.log(`🔍 Mencari lagu dengan nama: "${input}"...`)
         const searchResult = await this.searchTrackByName(input, 1)
-        
+
         if (searchResult.success && Array.isArray(searchResult.data)) {
           if (searchResult.data.length > 0) {
             const trackInfo = searchResult.data[0]
@@ -283,9 +287,9 @@ class SpotifyService {
 
     } catch (error: any) {
       console.error('❌ Error getting track by ID:', error)
-      
+
       let errorMessage = 'Terjadi error tidak dikenal'
-      
+
       if (error?.body?.error) {
         switch (error.body.error.status) {
           case 400:
@@ -316,15 +320,15 @@ class SpotifyService {
   // Helper method untuk test multiple inputs (URLs atau nama lagu)
   async testMultipleInputs(inputs: string[]): Promise<void> {
     console.log(`🧪 Testing ${inputs.length} Spotify inputs...\n`)
-    
+
     for (let i = 0; i < inputs.length; i++) {
       const input = inputs[i]
       const isUrl = this.extractTrackId(input!) !== null
-      
+
       console.log(`[${i + 1}/${inputs.length}] Testing ${isUrl ? 'URL' : 'Search'}: ${input}`)
-      
+
       const result = await this.getTrackInfo(input!)
-      
+
       if (result.success) {
         console.log('✅ Success:')
         console.log(`   🎵 ${result.data.title}`)
@@ -339,7 +343,7 @@ class SpotifyService {
           console.log(`   Details:`, result.details)
         }
       }
-      
+
       console.log('') // Empty line for separation
     }
   }
@@ -347,12 +351,12 @@ class SpotifyService {
   // Test search dengan multiple results
   async testSearch(query: string, limit: number = 5): Promise<void> {
     console.log(`🔍 Searching for: "${query}" (limit: ${limit})\n`)
-    
+
     const result = await this.searchTrackByName(query, limit)
-    
+
     if (result.success && Array.isArray(result.data)) {
       console.log(`✅ Found ${result.data.length} results:\n`)
-      
+
       result.data.forEach((track, index) => {
         console.log(`[${index + 1}] 🎵 ${track.title}`)
         console.log(`    👤 ${track.artist}`)
@@ -370,7 +374,7 @@ class SpotifyService {
 // Export default function untuk testing
 export default async function testSpotify() {
   const spotifyService = new SpotifyService()
-  
+
   // Test URLs - berbagai format
   const testUrls = [
     "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC",
@@ -385,9 +389,9 @@ export default async function testSpotify() {
     console.log('='.repeat(50))
     console.log('🎧 SPOTIFY API TEST')
     console.log('='.repeat(50))
-    
+
     const singleResult = await spotifyService.getTrackInfo(testUrls[0]!)
-    
+
     if (singleResult.success) {
       console.log('✅ Single URL Test - SUCCESS')
       console.log('Track Info:', JSON.stringify(singleResult.data, null, 2))
@@ -395,16 +399,16 @@ export default async function testSpotify() {
       console.log('❌ Single URL Test - FAILED')
       console.log('Error:', singleResult.error)
     }
-    
+
     console.log('\n' + '='.repeat(50))
     console.log('📋 MULTIPLE URLs TEST')
     console.log('='.repeat(50))
-    
+
     // Test multiple URLs
     await spotifyService.testMultipleInputs(testUrls)
-    
+
     console.log('🎉 Test completed!')
-    
+
   } catch (error) {
     console.error('💥 Fatal error during test:', error)
   }
@@ -413,35 +417,57 @@ export default async function testSpotify() {
 // Export class untuk digunakan di tempat lain
 export { SpotifyService }
 
+// Interface untuk item di queue
+export interface QueueItem {
+  url: string
+  title: string
+  requestedBy: string
+  requestedByName: string
+  addedAt: string
+  duration?: string
+  thumbnail?: string
+}
+
+const OWNER_ID = '1047780327789174824'
+
 export class YoutubeMusicPlayer {
   public player: AudioPlayer
   public connection: VoiceConnection | null = null
-  public currentResource: any = null
+  public currentResource: AudioResource | null = null
   public isPlaying: boolean = false
   public YT_API_KEY: string
   public looping: boolean = false
   public lastTrack: { url: string, title: string } | null = null
   public streamUrl: string | null = null
-  private lastFilePath: any
+  private lastFilePath: string | null = null
+  public queue: QueueItem[] = []
+  public nowPlaying: QueueItem | null = null
 
   constructor() {
     this.player = createAudioPlayer()
     this.player.on(AudioPlayerStatus.Idle, async () => {
+      // 1. Kalau looping, ulang lagu yang sama
       if (this.looping && this.lastFilePath) {
         console.log(`🔁 Looping: ${this.lastFilePath}`)
-        const stream = fs.createReadStream(this.lastFilePath)
-        this.currentResource = createAudioResource(stream, {
-          inputType: StreamType.Arbitrary,
-          inlineVolume: true,
-          metadata: this.lastFilePath,
-        })
-        this.currentResource.volume.setVolume(1.2)
+        this.currentResource = this.createLoudResource(this.lastFilePath)
         this.player.play(this.currentResource)
+        return
       }
+
+      // 2. Kalau ada lagu di queue, play next
+      if (this.queue.length > 0) {
+        console.log(`📋 Queue has ${this.queue.length} songs, playing next...`)
+        await this.playNextInQueue()
+        return
+      }
+
+      // 3. Kalau kosong, idle
+      this.isPlaying = false
+      this.nowPlaying = null
+      console.log('⏹️ Queue kosong, idle.')
     })
     this.YT_API_KEY = process.env["YT_API_KEY"] || ''
     console.log(this.YT_API_KEY)
-    // this.setupPlayerListeners()
   }
 
   public setupPlayerListeners(): void {
@@ -467,7 +493,7 @@ export class YoutubeMusicPlayer {
     })
   }
 
- async join(voiceChannel: VoiceChannel): Promise<boolean> {
+  async join(voiceChannel: VoiceChannel): Promise<boolean> {
     if (this.connection) {
       this.connection.destroy()
       this.connection = null
@@ -480,7 +506,8 @@ export class YoutubeMusicPlayer {
       channelId: voiceChannel.id,
       guildId: voiceChannel.guild.id,
       adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-      selfDeaf: false,
+      selfDeaf: true,
+      selfMute: false,
     })
 
     // Log tiap state biar kelihatan progresnya
@@ -488,7 +515,13 @@ export class YoutubeMusicPlayer {
       console.log(`🔄 Voice connection: ${oldState.status} → ${newState.status}`)
     })
 
+    this.connection.on('error', (error) => {
+      console.error('❌ Voice Connection Error:', error)
+    })
+
     try {
+      await entersState(this.connection, VoiceConnectionStatus.Connecting, 5_000)
+
       await entersState(this.connection, VoiceConnectionStatus.Signalling, 10_000)
         .catch(() => console.warn("⚠️ Still signalling... continuing"))
 
@@ -509,6 +542,169 @@ export class YoutubeMusicPlayer {
     }
   }
 
+  // ========== QUEUE MANAGEMENT ==========
+
+  isOwner(userId: string): boolean {
+    return userId === OWNER_ID
+  }
+
+  getCurrentDateTime_(): string {
+    return new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })
+  }
+
+  addToQueue(url: string, title: string, userId: string, username: string): QueueItem {
+    const item: QueueItem = {
+      url,
+      title,
+      requestedBy: userId,
+      requestedByName: username,
+      addedAt: this.getCurrentDateTime_(),
+    }
+    this.queue.push(item)
+    this.saveToList(title, url)
+    console.log(`📋 Added to queue [${this.queue.length}]: ${title} (by ${username})`)
+    return item
+  }
+
+  async playNextInQueue(): Promise<{ success: boolean, title?: string, error?: string }> {
+    if (this.queue.length === 0) {
+      this.isPlaying = false
+      this.nowPlaying = null
+      return { success: false, error: 'Antrian kosong' }
+    }
+
+    const next = this.queue.shift()!
+    this.nowPlaying = next
+    console.log(`⏭️ Playing next in queue: ${next.title}`)
+
+    const result = await this.play(next.url)
+    if (result.success) {
+      this.nowPlaying = { ...next, title: result.title || next.title }
+    }
+    return result
+  }
+
+  async addPlaylistToQueue(playlistUrl: string, userId: string, username: string): Promise<{ success: boolean, count: number, error?: string }> {
+    try {
+      console.log(`📃 Parsing YouTube playlist: ${playlistUrl}`)
+      const { stdout } = await execAsync(
+        `bin/yt-dlp --flat-playlist --print-json "${playlistUrl}"`,
+        { maxBuffer: 1024 * 1024 * 10 }
+      )
+
+      const lines = stdout.trim().split('\n').filter(Boolean)
+      let count = 0
+
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line)
+          const videoUrl = `https://www.youtube.com/watch?v=${entry.id}`
+          const videoTitle = entry.title || 'Unknown'
+
+          this.addToQueue(videoUrl, videoTitle, userId, username)
+          count++
+        } catch {
+          // skip broken entries
+        }
+      }
+
+      console.log(`✅ Added ${count} songs from playlist to queue`)
+      return { success: true, count }
+    } catch (error) {
+      console.error('❌ Failed to parse playlist:', error)
+      return { success: false, count: 0, error: 'Gagal parse playlist YouTube' }
+    }
+  }
+
+  getQueue(): { nowPlaying: QueueItem | null, queue: QueueItem[] } {
+    return {
+      nowPlaying: this.nowPlaying,
+      queue: [...this.queue]
+    }
+  }
+
+  skipSong(): { success: boolean, skipped?: string, next?: string } {
+    const skipped = this.nowPlaying?.title || this.lastTrack?.title || 'Unknown'
+    this.player.stop() // triggers idle -> playNextInQueue
+    return {
+      success: true,
+      skipped,
+      next: this.queue[0]?.title || 'Tidak ada lagi di antrian'
+    }
+  }
+
+  clearQueue(userId: string): { success: boolean, error?: string, cleared?: number } {
+    if (!this.isOwner(userId)) {
+      return { success: false, error: 'Hanya owner yang bisa clear queue!' }
+    }
+    const cleared = this.queue.length
+    this.queue = []
+    console.log(`🗑️ Queue cleared by owner (${cleared} songs removed)`)
+    return { success: true, cleared }
+  }
+
+  removeFromQueue(index: number, _userId: string): { success: boolean, removed?: string, error?: string } {
+    if (index < 0 || index >= this.queue.length) {
+      return { success: false, error: 'Nomor antrian tidak valid!' }
+    }
+    const removed = this.queue.splice(index, 1)[0]!
+    console.log(`🗑️ Removed from queue: ${removed.title}`)
+    return { success: true, removed: removed.title }
+  }
+
+  prioritize(index: number, userId: string): { success: boolean, title?: string, error?: string } {
+    if (!this.isOwner(userId)) {
+      return { success: false, error: 'Hanya owner yang bisa prioritaskan lagu!' }
+    }
+    if (index < 0 || index >= this.queue.length) {
+      return { success: false, error: 'Nomor antrian tidak valid!' }
+    }
+    const [item] = this.queue.splice(index, 1)
+    this.queue.unshift(item!)
+    console.log(`⬆️ Prioritized: ${item!.title} moved to #1`)
+    return { success: true, title: item!.title }
+  }
+
+  async skipTo(index: number, userId: string): Promise<{ success: boolean, title?: string, error?: string }> {
+    if (!this.isOwner(userId)) {
+      return { success: false, error: 'Hanya owner yang bisa skip ke lagu tertentu!' }
+    }
+    if (index < 0 || index >= this.queue.length) {
+      return { success: false, error: 'Nomor antrian tidak valid!' }
+    }
+    // Remove everything before the index
+    const skippedItems = this.queue.splice(0, index)
+    console.log(`⏭️ Skipped ${skippedItems.length} songs, jumping to: ${this.queue[0]?.title}`)
+    this.player.stop() // triggers idle -> playNextInQueue
+    return { success: true, title: this.queue[0]?.title || 'Unknown' }
+  }
+
+  isYouTubePlaylist(url: string): boolean {
+    return url.includes('playlist?list=') || url.includes('&list=')
+  }
+
+  // Volume lewat ffmpeg langsung, bukan inlineVolume
+  createLoudResource(filePath: string, volume: number = 2.5): AudioResource {
+    const ffmpeg = spawn('ffmpeg', [
+      '-i', filePath,
+      '-af', `volume=${volume}`,
+      '-f', 's16le',
+      '-ar', '48000',
+      '-ac', '2',
+      'pipe:1'
+    ], { stdio: ['ignore', 'pipe', 'ignore'] })
+
+    const resource = createAudioResource(ffmpeg.stdout, {
+      inputType: StreamType.Raw,
+    })
+
+    ffmpeg.on('error', (err) => {
+      console.error('❌ FFmpeg error:', err)
+    })
+
+    return resource
+  }
+
   public isValidUrl(string: string): boolean {
     try {
       new URL(string)
@@ -521,11 +717,11 @@ export class YoutubeMusicPlayer {
   async searchWithYtDLP(query: string): Promise<string | null> {
     try {
       console.log("🔍 Searching with yt-dlp for:", query)
-      const { stdout } = await execAsync(`yt-dlp "ytsearch:${query}" --get-id --get-title`) as any
+      const { stdout } = await execAsync(`bin/yt-dlp "ytsearch:${query}" --get-id --get-title`) as any
       const [title, id] = stdout.trim().split('\n')
       if (!id) throw new Error("ID tidak ditemukan")
       console.log({ title, id })
-      this.writeNewMusic( title,`https://www.youtube.com/watch?v=${id}`)
+      this.writeNewMusic(title, `https://www.youtube.com/watch?v=${id}`)
       return `https://www.youtube.com/watch?v=${id}`
     } catch (error) {
       console.error("❌ Failed to search with yt-dlp:", error)
@@ -549,7 +745,7 @@ export class YoutubeMusicPlayer {
       const finalUrl = `https://www.googleapis.com/youtube/v3/search?${params}`
       console.log("🔗 Final URL:", finalUrl)
       res = await fetch(finalUrl)
-      if (!res.ok){ throw new Error(res.statusText) }
+      if (!res.ok) { throw new Error(res.statusText) }
 
       const data = await res?.json() as any
 
@@ -558,7 +754,7 @@ export class YoutubeMusicPlayer {
         const videoId = video.id.videoId
         const title = video.snippet.title
         console.log(`✅ Found: ${title}`)
-        this.writeNewMusic(title,`https://www.youtube.com/watch?v=${videoId}`)
+        this.writeNewMusic(title, `https://www.youtube.com/watch?v=${videoId}`)
         return `https://www.youtube.com/watch?v=${videoId}`
       }
 
@@ -595,33 +791,19 @@ export class YoutubeMusicPlayer {
       }
 
       // Get video info
-      try {        
+      try {
 
         const filePath = await this.downloadMusic(url)
         this.lastFilePath = filePath
         if (!filePath) return { success: false, error: 'Gagal download musik', title }
 
-        const stream = fs.createReadStream(filePath)
-
-        this.currentResource = createAudioResource(stream as any, {
-          inputType: StreamType.Arbitrary,
-          inlineVolume: true,
-          metadata: { title }
-        })
-
-        // Set initial volume
-        if (this.currentResource.volume) {
-          this.currentResource.volume.setVolume(1.2)
-        }
+        this.currentResource = this.createLoudResource(filePath)
 
         // Play the resource
         this.player.play(this.currentResource)
         this.lastTrack = { url, title: title || 'Unknown' }
         console.log("Last Track Metadata: ", this.lastTrack)
         console.log(`🎵 Now playing: ${title}`)
-        this.player.on(AudioPlayerStatus.Playing, () => console.log("🎶 Playing audio..."))
-        this.player.on(AudioPlayerStatus.Idle, () => console.log("🛑 Audio ended."))
-        this.player.on("error", e => console.error("Audio player error:", e))
 
 
         return { success: true, title }
@@ -649,8 +831,8 @@ export class YoutubeMusicPlayer {
     const audioStream = data.stream
     return audioStream
   }
-  
-  readHistory(){
+
+  readHistory() {
     try {
       console.log("Folder path: ", historyMusicFile)
       if (!fs.existsSync(historyMusicFile)) {
@@ -662,12 +844,12 @@ export class YoutubeMusicPlayer {
       }
       return JSON.parse(data)
     }
-      catch (err) {
-        console.error(err)
-        return []
+    catch (err) {
+      console.error(err)
+      return []
     }
   }
-  
+
   getCurrentDateTime() {
     const now = new Date()
     const year = now.getFullYear()
@@ -678,8 +860,22 @@ export class YoutubeMusicPlayer {
     const seconds = String(now.getSeconds()).padStart(2, '0')
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
   }
-  
-  
+
+  saveToList(title: string, linkYt: string) {
+    const listMusic = path.resolve('list_music.json')
+    const timestamp = this.getCurrentDateTime()
+    const [date, time] = timestamp.split(' ')
+
+    let musicList: any[] = []
+    if (fs.existsSync(listMusic)) {
+      musicList = JSON.parse(fs.readFileSync(listMusic, 'utf-8'))
+    }
+
+    const entry = { musicData: title, linkYt, date, time }
+    musicList.push(entry)
+    fs.writeFileSync(listMusic, JSON.stringify(musicList, null, 2), 'utf-8')
+  }
+
   writeNewMusic(title: string, linkYt: string) {
     const historyFile = path.resolve('music_history.json')
     const timestamp = this.getCurrentDateTime()
@@ -700,24 +896,24 @@ export class YoutubeMusicPlayer {
     fs.writeFileSync(historyFile, JSON.stringify(musicList, null, 2), 'utf-8')
   }
 
-   // ✅ Download jika file belum ada
+  // ✅ Download jika file belum ada
   async downloadMusic(url: string): Promise<string | null> {
     this.ensureMusicDir()
 
     try {
       // clear cache
-      execAsync('yt-dlp --rm-cache-dir')
+      execAsync('bin/yt-dlp --rm-cache-dir')
 
       // ambil info dulu buat tau judul & nama file
-      const info = await execAsync(`yt-dlp -e ${url}`)
+      const info = await execAsync(`bin/yt-dlp -e ${url}`)
       const rawTitle = info.stdout.trim()
 
       // ubah karakter ilegal jadi spasi atau strip aja
       const title = rawTitle
-      .replace(/[<>:"/\\|?*\x00-\x1F]/g, '') // hapus karakter ilegal
-      .replace(/\s+/g, ' ') // rapikan spasi berlebih
-      .replace(/\.+$/, '') // hapus titik di akhir
-      .trim() || 'Unknown_Song'
+        .replace(/[<>:"/\\|?*\x00-\x1F]/g, '') // hapus karakter ilegal
+        .replace(/\s+/g, '_') // rapikan spasi berlebih menjadi underscore
+        .replace(/\.+$/, '') // hapus titik di akhir
+        .trim() || 'Unknown_Song'
 
       const filePath = path.join(musicDir, `${title}.mp3`)
 
@@ -729,7 +925,7 @@ export class YoutubeMusicPlayer {
 
       console.log('⬇️ Downloading:', title)
       await execAsync(
-        `yt-dlp --extract-audio --audio-format mp3 -o "${filePath}" ${url}`
+        `bin/yt-dlp --extract-audio --audio-format mp3 -o "${filePath}" ${url}`
       )
 
       console.log('✅ Download complete:', filePath)
@@ -744,8 +940,8 @@ export class YoutubeMusicPlayer {
     this.player.stop()
     this.lastFilePath = null
     this.looping = false
+    this.nowPlaying = null
     this.cleanup()
-    // this.disconnect()
   }
 
   pause(): void {
@@ -783,6 +979,8 @@ export class YoutubeMusicPlayer {
 
   disconnect(): void {
     this.stop()
+    this.queue = []
+    this.nowPlaying = null
     if (this.connection) {
       this.connection.destroy()
       this.connection = null
