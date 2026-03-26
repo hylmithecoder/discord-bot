@@ -710,65 +710,6 @@ export function handleRouter() {
   return app
 }
 
-// Fungsi untuk proxy stream dari Google ke client
-async function proxyStream(streamUrl: string, res: any, req: any) {
-  try {
-    // Headers yang dibutuhin Google Video server
-    const headers = {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0 Win64 x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Accept": "*/*",
-      "Accept-Language": "en-US,enq=0.9",
-      "Origin": "https://www.youtube.com",
-      "Referer": "https://www.youtube.com/",
-      "Sec-Fetch-Dest": "empty",
-      "Sec-Fetch-Mode": "cors",
-      "Sec-Fetch-Site": "cross-site",
-    } as any
-
-    // Support Range request untuk seeking
-    if (req.headers.range) {
-      headers["Range"] = req.headers.range
-    }
-
-    const response = await fetch(streamUrl, { headers }) as any
-
-    if (!response.ok) {
-      console.error("❌ Google returned:", response.status)
-      return res.status(response.status).json({
-        error: "Stream unavailable",
-        status: response.status,
-      })
-    }
-
-    // Forward response headers
-    res.setHeader("Content-Type", response.headers.get("content-type") || "audio/webm")
-
-    const contentLength = response.headers.get("content-length")
-    if (contentLength) {
-      res.setHeader("Content-Length", contentLength)
-    }
-
-    const contentRange = response.headers.get("content-range")
-    if (contentRange) {
-      res.setHeader("Content-Range", contentRange)
-      res.status(206) // Partial content
-    }
-
-    // Enable CORS
-    res.setHeader("Access-Control-Allow-Origin", "*")
-    res.setHeader("Accept-Ranges", "bytes")
-
-    // Pipe stream ke client
-    response.body.pipe(res)
-
-  } catch (error: any) {
-    console.error("Proxy error:", error.message)
-    if (!res.headersSent) {
-      res.status(500).json({ error: "Proxy failed: " + error.message })
-    }
-  }
-}
-
 // Bersihkan cache tiap 10 menit
 setInterval(() => {
   const now = Date.now()

@@ -3,23 +3,6 @@ import { Memory, type MessageMemory } from "./memory.js"
 import fs from "fs/promises"
 import path from "path"
 
-// === LLAMA.CPP AI SERVICE ===
-interface LlamaResponse {
-  content: string
-  generation_settings: any
-  model: string
-  prompt: string
-  stopped_eos: boolean
-  stopped_limit: boolean
-  stopped_word: boolean
-  stopping_word: string
-  timings: any
-  tokens_cached: number
-  tokens_evaluated: number
-  tokens_predicted: number
-  truncated: boolean
-}
-
 interface GeminiResponse {
   candidates?: [{
     content: {

@@ -684,7 +684,7 @@ export class YoutubeMusicPlayer {
   }
 
   // Volume lewat ffmpeg langsung, bukan inlineVolume
-  createLoudResource(filePath: string, volume: number = 2.5): AudioResource {
+  createLoudResource(filePath: string, volume: number = 1.2): AudioResource {
     const ffmpeg = spawn('ffmpeg', [
       '-i', filePath,
       '-af', `volume=${volume}`,
